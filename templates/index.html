@@ -3,40 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protected GitHub Uploader</title>
+    <title>Python Direct Uploader (Support Large File)</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
 
     <div class="w-full max-w-md bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-2xl">
         <div class="flex justify-between items-center mb-1">
-            <h1 class="text-xl font-bold text-emerald-400">GitHub Uploader</h1>
+            <h1 class="text-xl font-bold text-emerald-400">Large File Uploader</h1>
             <button type="button" onclick="resetKey()" id="resetKeyBtn" class="text-xs text-slate-400 hover:text-red-400 hidden underline">
                 Hapus Key
             </button>
         </div>
-        <p class="text-sm text-slate-400 mb-6">Masukkan Access Key sebelum mengunggah file.</p>
+        <p class="text-sm text-slate-400 mb-6">Backend Python (Flask) + Direct Git Data API.</p>
 
         <form id="uploadForm" class="space-y-4">
-            <!-- Input Secret Key -->
-            <div id="keyContainer">
+            <!-- Input Access Key -->
+            <div>
                 <label for="accessKey" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">
                     Access Key
                 </label>
-                <input type="password" id="accessKey" name="access_key" placeholder="Masukkan Passcode Anda" required
+                <input type="password" id="accessKey" placeholder="Masukkan Passcode Anda" required
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
             </div>
 
             <!-- Input File -->
             <div class="flex flex-col items-center justify-center border-2 border-dashed border-slate-600 rounded-lg p-6 bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition cursor-pointer relative">
-                <input type="file" id="fileInput" name="file" class="absolute inset-0 opacity-0 cursor-pointer" required onchange="updateFileName(this)">
+                <input type="file" id="fileInput" class="absolute inset-0 opacity-0 cursor-pointer" required onchange="updateFileName(this)">
                 <svg class="w-10 h-10 text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
                 </svg>
                 <span id="fileLabel" class="text-sm text-slate-300 font-medium text-center">Pilih atau seret file ke sini</span>
             </div>
 
-            <!-- Submit Button -->
             <button type="submit" id="submitBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 px-4 rounded-lg transition duration-200 flex items-center justify-center">
                 <span id="btnText">Unggah ke GitHub</span>
                 <span id="btnSpinner" class="hidden ml-2">
@@ -52,7 +51,6 @@
     </div>
 
     <script>
-        // Cek LocalStorage saat halaman dimuat
         document.addEventListener('DOMContentLoaded', () => {
             const savedKey = localStorage.getItem('uploader_access_key');
             if (savedKey) {
@@ -65,72 +63,63 @@
             localStorage.removeItem('uploader_access_key');
             document.getElementById('accessKey').value = '';
             document.getElementById('resetKeyBtn').classList.add('hidden');
-            alert('Key telah dihapus dari memori browser.');
         }
 
         function updateFileName(input) {
             const label = document.getElementById('fileLabel');
-            if (input.files && input.files[0]) {
-                label.textContent = input.files[0].name;
-            } else {
-                label.textContent = "Pilih atau seret file ke sini";
-            }
+            label.textContent = (input.files && input.files[0]) ? input.files[0].name : "Pilih atau seret file ke sini";
         }
 
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const accessKeyInput = document.getElementById('accessKey');
-            const fileInput = document.getElementById('fileInput');
+            const accessKey = document.getElementById('accessKey').value.trim();
+            const file = document.getElementById('fileInput').files[0];
             const submitBtn = document.getElementById('submitBtn');
             const btnText = document.getElementById('btnText');
             const btnSpinner = document.getElementById('btnSpinner');
             const statusAlert = document.getElementById('statusAlert');
 
-            const accessKey = accessKeyInput.value.trim();
-            if (!accessKey || !fileInput.files[0]) return;
+            if (!accessKey || !file) return;
 
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-
-            // UI Loading State
+            // UI Loading
             submitBtn.disabled = true;
-            btnText.textContent = "Mengunggah...";
+            btnText.textContent = "Mengotentikasi...";
             btnSpinner.classList.remove('hidden');
             statusAlert.classList.add('hidden');
 
             try {
-                const response = await fetch('/api/upload', {
+                // Step 1: Minta Otorisasi & Config dari Backend Flask (Python)
+                const configRes = await fetch('/api/config', {
                     method: 'POST',
-                    headers: {
-                        'X-Access-Key': accessKey // Dikirim via Header HTTP
-                    },
-                    body: formData
+                    headers: { 'Content-Type': 'application/json', 'X-Access-Key': accessKey },
+                    body: JSON.stringify({ access_key: accessKey })
                 });
 
-                const data = await response.json();
+                const config = await configRes.json();
+                if (!configRes.ok) throw new Error(config.error || "Akses Ditolak");
 
-                statusAlert.classList.remove('hidden', 'bg-red-900/50', 'text-red-300', 'bg-emerald-900/50', 'text-emerald-300');
+                // Simpan Key jika sukses
+                localStorage.setItem('uploader_access_key', accessKey);
+                document.getElementById('resetKeyBtn').classList.remove('hidden');
 
-                if (response.ok && data.success) {
-                    // Simpan key ke LocalStorage jika upload sukses
-                    localStorage.setItem('uploader_access_key', accessKey);
-                    document.getElementById('resetKeyBtn').classList.remove('hidden');
+                // Step 2: Upload File Langsung dari Browser ke GitHub Git Data API
+                btnText.textContent = "Mengunggah File...";
+                const commitResult = await uploadViaGitDataAPI(file, config.token, config.owner, config.repo, config.branch);
 
-                    statusAlert.classList.add('bg-emerald-900/50', 'text-emerald-300', 'border', 'border-emerald-700');
-                    statusAlert.innerHTML = `
-                        <strong>Berhasil!</strong><br>
-                        File: ${data.filename}<br>
-                        <a href="${data.html_url}" target="_blank" class="underline hover:text-white">Lihat di GitHub &rarr;</a>
-                    `;
-                    
-                    // Reset input file saja (key tetap ada)
-                    fileInput.value = '';
-                    document.getElementById('fileLabel').textContent = "Pilih atau seret file ke sini";
-                } else {
-                    throw new Error(data.error || 'Terjadi kesalahan saat upload');
-                }
+                statusAlert.classList.remove('hidden', 'bg-red-900/50', 'text-red-300');
+                statusAlert.classList.add('bg-emerald-900/50', 'text-emerald-300', 'border', 'border-emerald-700');
+                statusAlert.innerHTML = `
+                    <strong>Berhasil Diunggah!</strong><br>
+                    File: ${file.name}<br>
+                    <a href="${commitResult.html_url}" target="_blank" class="underline hover:text-white">Lihat Commit di GitHub &rarr;</a>
+                `;
+
+                document.getElementById('fileInput').value = '';
+                document.getElementById('fileLabel').textContent = "Pilih atau seret file ke sini";
+
             } catch (err) {
+                statusAlert.classList.remove('hidden', 'bg-emerald-900/50', 'text-emerald-300');
                 statusAlert.classList.add('bg-red-900/50', 'text-red-300', 'border', 'border-red-700');
                 statusAlert.textContent = `Error: ${err.message}`;
             } finally {
@@ -139,6 +128,78 @@
                 btnSpinner.classList.add('hidden');
             }
         });
+
+        // --- Logika Git Data API (Direct Client Upload) ---
+        async function uploadViaGitDataAPI(file, token, owner, repo, branch) {
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            };
+
+            // 1. Convert File ke Base64
+            const arrayBuffer = await file.arrayBuffer();
+            const base64Content = bufferToBase64(arrayBuffer);
+
+            // 2. Buat Blob di GitHub
+            const blobRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ content: base64Content, encoding: 'base64' })
+            });
+            const blobData = await blobRes.json();
+            if (!blobRes.ok) throw new Error(blobData.message || "Gagal membuat blob");
+
+            // 3. Ambil SHA Commit Terakhir
+            const refRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`, { headers });
+            const refData = await refRes.json();
+            const latestCommitSha = refData.object.sha;
+
+            // 4. Ambil Tree SHA
+            const commitRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/commits/${latestCommitSha}`, { headers });
+            const commitData = await commitRes.json();
+
+            // 5. Buat Tree Baru (Menambahkan File ke Folder uploads/)
+            const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    base_tree: commitData.tree.sha,
+                    tree: [{ path: `uploads/${file.name}`, mode: '100644', type: 'blob', sha: blobData.sha }]
+                })
+            });
+            const treeData = await treeRes.json();
+
+            // 6. Buat Commit Baru
+            const newCommitRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/commits`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    message: `upload: ${file.name} via Python Direct Uploader`,
+                    tree: treeData.sha,
+                    parents: [latestCommitSha]
+                })
+            });
+            const newCommitData = await newCommitRes.json();
+
+            // 7. Update Branch Reference
+            await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`, {
+                method: 'PATCH',
+                headers,
+                body: JSON.stringify({ sha: newCommitData.sha, force: false })
+            });
+
+            return newCommitData;
+        }
+
+        function bufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(binary);
+        }
     </script>
 </body>
 </html>
