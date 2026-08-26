@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Uploader - Vercel & Flask</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-md bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-2xl">
+        <h1 class="text-xl font-bold mb-1 text-emerald-400">GitHub File Uploader</h1>
+        <p class="text-sm text-slate-400 mb-6">File akan diunggah ke repository melalui Vercel API.</p>
+
+        <form id="uploadForm" class="space-y-4">
+            <div class="flex flex-col items-center justify-center border-2 border-dashed border-slate-600 rounded-lg p-6 bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition cursor-pointer relative">
+                <input type="file" id="fileInput" name="file" class="absolute inset-0 opacity-0 cursor-pointer" required onchange="updateFileName(this)">
+                <svg class="w-10 h-10 text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <span id="fileLabel" class="text-sm text-slate-300 font-medium text-center">Pilih atau seret file ke sini</span>
+            </div>
+
+            <button type="submit" id="submitBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 px-4 rounded-lg transition duration-200 flex items-center justify-center">
+                <span id="btnText">Unggah ke GitHub</span>
+                <span id="btnSpinner" class="hidden ml-2">
+                    <svg class="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                </span>
+            </button>
+        </form>
+
+        <div id="statusAlert" class="mt-4 p-3 rounded-lg hidden text-sm font-mono break-all"></div>
+    </div>
+
+    <script>
+        function updateFileName(input) {
+            const label = document.getElementById('fileLabel');
+            if (input.files && input.files[0]) {
+                label.textContent = input.files[0].name;
+            } else {
+                label.textContent = "Pilih atau seret file ke sini";
+            }
+        }
+
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('fileInput');
+            const submitBtn = document.getElementById('submitBtn');
+            const btnText = document.getElementById('btnText');
+            const btnSpinner = document.getElementById('btnSpinner');
+            const statusAlert = document.getElementById('statusAlert');
+
+            if (!fileInput.files[0]) return;
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            // UI State: Loading
+            submitBtn.disabled = true;
+            btnText.textContent = "Mengunggah...";
+            btnSpinner.classList.remove('hidden');
+            statusAlert.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                statusAlert.classList.remove('hidden', 'bg-red-900/50', 'text-red-300', 'bg-emerald-900/50', 'text-emerald-300');
+
+                if (response.ok && data.success) {
+                    statusAlert.classList.add('bg-emerald-900/50', 'text-emerald-300', 'border', 'border-emerald-700');
+                    statusAlert.innerHTML = `
+                        <strong>Berhasil!</strong><br>
+                        File: ${data.filename}<br>
+                        <a href="${data.html_url}" target="_blank" class="underline hover:text-white">Lihat di GitHub &rarr;</a>
+                    `;
+                    document.getElementById('uploadForm').reset();
+                    document.getElementById('fileLabel').textContent = "Pilih atau seret file ke sini";
+                } else {
+                    throw new Error(data.error || 'Terjadi kesalahan saat upload');
+                }
+            } catch (err) {
+                statusAlert.classList.add('bg-red-900/50', 'text-red-300', 'border', 'border-red-700');
+                statusAlert.textContent = `Error: ${err.message}`;
+            } finally {
+                submitBtn.disabled = false;
+                btnText.textContent = "Unggah ke GitHub";
+                btnSpinner.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
