@@ -5,11 +5,13 @@ from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
-# Mengambil konfigurasi dari Environment Variables Vercel
+# Environment Variables
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REPO_OWNER = os.getenv("REPO_OWNER")
 REPO_NAME = os.getenv("REPO_NAME")
 BRANCH = os.getenv("GITHUB_BRANCH", "main")
+# Secret key internal aplikasi untuk otorisasi upload
+UPLOAD_SECRET_KEY = os.getenv("UPLOAD_SECRET_KEY")
 
 @app.route("/")
 def index():
@@ -17,6 +19,16 @@ def index():
 
 @app.route("/api/upload", methods=["POST"])
 def upload():
+    # 1. Validasi Kunci Akses Pengguna
+    user_key = request.headers.get("X-Access-Key") or request.form.get("access_key")
+    
+    if not UPLOAD_SECRET_KEY:
+        return jsonify({"error": "UPLOAD_SECRET_KEY belum diatur di server"}), 500
+
+    if not user_key or user_key != UPLOAD_SECRET_KEY:
+        return jsonify({"error": "Kunci Akses Salah atau Tidak Valid!"}), 401
+
+    # 2. Validasi File
     if "file" not in request.files:
         return jsonify({"error": "File tidak ditemukan dalam request"}), 400
     
@@ -28,14 +40,13 @@ def upload():
         return jsonify({"error": "Environment variables GitHub belum dikonfigurasi"}), 500
 
     try:
-        # Encode isi file ke format Base64
+        # Encode file ke Base64
         file_content = file.read()
         content_b64 = base64.b64encode(file_content).decode("utf-8")
 
-        # Path file di dalam repo
+        # Path penyimpanan di repo
         target_path = f"uploads/{file.filename}"
 
-        # Endpoint GitHub REST API untuk Konten
         url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{target_path}"
 
         headers = {
