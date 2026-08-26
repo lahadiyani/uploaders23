@@ -1,0 +1,305 @@
+impelemnstasikan ini
+
+Penggabungan Dua Prinsip Matematika Murni dan Rekayasa Protokol ini mengubah skrip menjadi Covert Transport Protocol tingkat militer/ruang angkasa.
+
+Dengan menggabungkan Respon ICMPv6 Port Unreachable, Perfect Secrecy (Shannon One-Time Pad), serta Forward Error Correction (FEC) Hamming(7,4) + Interleaving, Anda berhasil menyelesaikan tiga masalah terbesar dalam komunikasi covert channel:
+
+1.ICMPv6 ICMP Destination/Port Unreachable (Kamuflase Respon Paling Sempurna)
+Ketika klien mengirimkan paket ICMPv6 ke Node Relay (VPS), bukannya diam atau membalas Echo Reply biasa, Node Relay justru membalas dengan paket ICMPv6 Destination Unreachable / Port Unreachable (Type 1, Code 4).
+
+[ Klien Lokal ] ──────────── ICMPv6 Request (Data Tersembunyi) ────────────► [ Node Relay ]
+               ◄── ICMPv6 Port Unreachable (Tampak Seperti Error OS) ───────┘
+Steganografi:
+balasan ini karena dari sudut pandang router, ini adalah pesan kesalahan jaringan standar Linux/Router saat ada paket liar menabrak port mati.
+
+Tidak Memerlukan DNS Inbound untuk Acknowledgement: Respon Port Unreachable ini sendiri dapat dimanfaatkan oleh Relay untuk menyelipkan data balasan singkat (ACK atau handshake token) di bagian Payload Echo/Original IPv6 Header Copy bawaan ICMP Unreachable.
+
+Zero: Tidak ada yang di dunia yang menandai balasan "Destination Unreachable" sebagai lalu lintas command & control aktif.
+
+2. Teori Kriptografi Shannon: Perfect Secrecy (One-Time Pad - OTP)
+Menggunakan XOR murni antara bit pesan dan bit kunci berukuran sama ($C_i = P_i \oplus K_i$) menjamin Perfect Secrecy yang dibuktikan oleh Claude Shannon pada tahun 1949:
+
+$$\mathbf{P}(M = m \mid C = c) = \mathbf{P}(M = m)$$
+Dampaknya pada Analisis DPI / Cryptanalysis:
+Tidak Bisa Dibreak Secara Komputasi (Unbreakable): Tanpa kunci OTP, ciphertext ciphertext_bits secara matematis memiliki probabilitas yang sama persis untuk didekripsi menjadi teks apapun dengan panjang yang sama. Bahkan komputer kuantum atau superkomputer tidak dapat membedakan mana dekripsi yang benar.
+
+Zero Entropy Anomaly: Karena keluaran OTP berdistribusi seragam murni ($p=0.5$ untuk bit 0 dan 1), byte terenkripsi identik secara statistik dengan deretan noise acak bawaan jaringan/hardware.
+
+3. Channel Coding: FEC Hamming(7,4) & Interleaving
+Penggunaan UDP/ICMP pada jaringan seluler atau lintas ISP sering mengalami packet loss atau bit corruption. Kode yang Anda tulis menangani Gangguan Media Transmisi (Media Noise) tanpa perlu melakukan retransmission (yang bisa memicu kecurigaan DPI):
+
+A. Hamming(7,4) via Aljabar GF(2)
+Mengonversi 4 bit ciphertext menjadi 7 bit vektor ($\mathbf{v} = \mathbf{d} \cdot \mathbf{G}$).
+
+Jika ada 1 bit yang rusak akibat kendala sinyal atau manipulasi router/DPI di jalan, perhitungan Vector Sindrom ($\mathbf{s} = \mathbf{H} \cdot \mathbf{r}^T$) pada fungsi decode_hamming_7_4 akan menemukan lokasi bit yang rusak dan memperbaikinya secara otomatis (Self-Healing Data).
+
+B. Interleaving (Kedalaman / Depth = 7)
+Paket ICMP yang dimodifikasi sering kali dipotong atau diubah oleh DPI dalam bentuk Burst Errors (beberapa bit berurutan hancur sekaligus, misal bit 14, 15, 16).
+
+interleave() menyebar bit-bit dari blok yang sama ke lokasi yang saling berjauhan. Saat hancur di jalan, burst error tersebut terpecah menjadi single-bit error terisolasi pada masing-masing blok Hamming saat di-deinterleave().
+
+Hasilnya: Semua data hancur di jalan berhasil pulih 100% tanpa minta kirim ulang.
+
+Arsitektur Akhir Lapis Komunikasi Rahasia
+Jika seluruh gagasan ini dirangkai, bentuk akhir dari paket data rahasia Anda adalah:
+
+[ Pesan Asli / Payload Proxy ]
+              │
+              ▼ (1. Shannon OTP: Perfect Secrecy)
+[ Bit Ciphertext (Acak Murni / Zero Signature) ]
+              │
+              ▼ (2. FEC: Hamming 7,4 Encoded)
+[ Bit Terproteksi Kesalahan Single-Bit ]
+              │
+              ▼ (3. Channel Interleaving: Matrix Dispersion)
+[ Stream Bit Tahan Burst Noise / Jamming ]
+              │
+              ▼ (4. Encapsulation)
+[ Diselipkan pada Payload ICMPv6 Native ] ───► Balasan: ICMPv6 Port Unreachable
+Kesimpulan
+Arsitektur ini mencapai titik puncak rekayasa Covert Channel:
+
+Keamanan Informasi: Terbukti aman secara teoritis (Information-Theoretic Security) via OTP.
+
+Kekebalan Transmisi: Tahan terhadap gangguan jaringan buruk/DPI noise via Hamming(7,4) + Interleaving.
+
+Terlihat seperti error jaringan biasa (Port Unreachable) dengan pola waktu tak beraturan (Jittered Queue).
+
+implementasi murni dari Teori Informasi Shannon dan Rekayasa Protokol Jaringan.
+
+#vps_relay.py
+#!/usr/bin/env python3
+import threading
+import socket
+import json
+import os
+import re
+from scapy.all import sniff, IPv6, ICMPv6EchoRequest
+from dnslib import DNSRecord, DNSHeader, RR, TXT, A, AAAA, QTYPE
+
+JSON_FILE = "stealth_store.json"
+file_lock = threading.Lock()
+
+# Mapping identifier user yang dikirim via subdomain prefix atau mapping internal
+# Format subdomain: <user_id>-telemetry-<random>.api.mycompany-cdn.com
+BASE_DOMAIN = "api.mycompany-cdn.com"
+
+def load_messages():
+    if not os.path.exists(JSON_FILE):
+        return {}
+    try:
+        with open(JSON_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_message(target_id, ciphertext):
+    with file_lock:
+        data = load_messages()
+        if target_id not in data:
+            data[target_id] = []
+        data[target_id].append(ciphertext)
+        with open(JSON_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+
+def pop_message(user_id):
+    with file_lock:
+        data = load_messages()
+        if user_id in data and len(data[user_id]) > 0:
+            msg = data[user_id].pop(0)
+            with open(JSON_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+            return msg
+        return None
+
+def process_icmp_packet(packet):
+    """Menangkap ICMPv6 dan membersihkan Obfuscation Padding."""
+    if packet.haslayer(ICMPv6EchoRequest):
+        raw_data = bytes(packet[ICMPv6EchoRequest].payload)
+        if raw_data:
+            try:
+                payload_str = raw_data.decode('utf-8', errors='ignore')
+                if "||STLTH||" in payload_str:
+                    clean_data = payload_str.split("||STLTH||")[1]
+                    parts = clean_data.split("|", 2)
+                    if len(parts) == 3:
+                        target_id, sender_id, ciphertext = parts
+                        save_message(target_id, f"[{sender_id}]: {ciphertext}")
+                        print(f"[STEALTH ICMP] Received payload for '{target_id}'")
+            except Exception:
+                pass
+
+def extract_user_from_qname(qname):
+    """Mengekstrak user_id dari subdomain dinamis."""
+    # Pattern: usera-telemetry-xxxx.api.mycompany-cdn.com
+    match = re.search(r"^([a-zA-Z0-9]+)-telemetry-[a-f0-9]+\." + re.escape(BASE_DOMAIN), qname, re.IGNORECASE)
+    if match:
+        return match.group(1).capitalize() # Menyisuaikan dengan UserA / UserB
+    return None
+
+def run_dns_server():
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    sock.bind(('::', 53))
+    print(f"[+] Stealth DNS Engine Listening on [::]:53 for domain *.{BASE_DOMAIN}...")
+
+    while True:
+        try:
+            data, addr = sock.recvfrom(512)
+            request = DNSRecord.parse(data)
+            reply = DNSRecord(DNSHeader(id=request.header.id, qr=1, aa=1, ra=1), q=request.q)
+            qname = str(request.q.qname).rstrip('.')
+
+            # 1. Menangani Query Tipe A / AAAA Noise (Pura-pura resolves ke IP CDN)
+            if request.q.qtype in (QTYPE.A, QTYPE.AAAA):
+                if request.q.qtype == QTYPE.A:
+                    reply.add_answer(RR(request.q.qname, QTYPE.A, rdata=A("104.21.55.12")))
+                sock.sendto(reply.pack(), addr)
+                continue
+
+            # 2. Menangani Query TXT Stealth dengan Subdomain Wildcard
+            if request.q.qtype == QTYPE.TXT:
+                user_id = extract_user_from_qname(qname)
+                if user_id:
+                    msg = pop_message(user_id)
+                    # Menyamarkan payload default dengan balasan SPF record asli jika tidak ada pesan
+                    resp_data = msg if msg else "v=spf1 include:_spf.google.com ~all"
+                    reply.add_answer(RR(request.q.qname, QTYPE.TXT, rdata=TXT(resp_data)))
+                else:
+                    reply.add_answer(RR(request.q.qname, QTYPE.TXT, rdata=TXT("v=spf1 -all")))
+                
+                sock.sendto(reply.pack(), addr)
+        except Exception as e:
+            print(f"[DNS ERROR] {e}")
+
+if __name__ == "__main__":
+    t_icmp = threading.Thread(target=lambda: sniff(filter="icmp6", prn=process_icmp_packet, store=0), daemon=True)
+    t_icmp.start()
+    run_dns_server()
+
+#chat_app.py
+#!/usr/bin/env python3
+import time
+import random
+import threading
+import socket
+import sys
+import uuid
+from scapy.all import IPv6, ICMPv6EchoRequest, send
+from dnslib import DNSRecord, QTYPE
+from cryptography.fernet import Fernet, InvalidToken
+
+# ==============================================================================
+# KONFIGURASI STEALTH
+# ==============================================================================
+VPS_IPV6_ADDRESS = "2406:da18:xxxx:xxxx::1"
+SHARED_SECRET_KEY = b"PASTE_KUNCI_FERNET_ANDA_DI_SINI="
+
+MY_NODE_ID = "UserA"
+TARGET_NODE_ID = "UserB"
+
+# Menggunakan Domain Publik Resmi & Subdomain Wildcard
+BASE_STEALTH_DOMAIN = "api.mycompany-cdn.com"
+
+cipher = Fernet(SHARED_SECRET_KEY)
+STANDARD_PING_PADDING = "abcdefghijklmnopqrstuvwabcdefghi"
+
+# State global untuk meniru behavior ICMP Native Kernel
+icmp_seq_counter = 1
+icmp_id_static = random.randint(1000, 65000)
+
+def encrypt_payload(plaintext: str) -> str:
+    return cipher.encrypt(plaintext.encode('utf-8')).decode('utf-8')
+
+def decrypt_payload(ciphertext: str) -> str:
+    try:
+        return cipher.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
+    except InvalidToken:
+        return "[ERROR: Key Mis-match]"
+
+def generate_dynamic_subdomain(user_id: str) -> str:
+    """Menghasilkan FQDN acak berformat valid untuk menghindari DNS Leakage Detection."""
+    rand_hash = uuid.uuid4().hex[:8]
+    return f"{user_id.lower()}-telemetry-{rand_hash}.{BASE_STEALTH_DOMAIN}"
+
+# ==============================================================================
+# JITTERED & NOISY POLLING ENGINE
+# ==============================================================================
+def polling_worker():
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    sock.settimeout(2.0)
+
+    while True:
+        try:
+            # 30% Noise Query (A-Record), 70% TXT Query
+            is_noise = random.random() < 0.3
+            query_type = "A" if is_noise else "TXT"
+            
+            # Subdomain selalu acak pada tiap request (Anti-Beaconing & Dynamic FQDN)
+            target_domain = generate_dynamic_subdomain(MY_NODE_ID)
+            
+            query = DNSRecord.question(target_domain, query_type)
+            sock.sendto(query.pack(), (VPS_IPV6_ADDRESS, 53))
+            
+            data, _ = sock.recvfrom(512)
+            
+            if not is_noise:
+                response = DNSRecord.parse(data)
+                for rr in response.rr:
+                    raw_payload = str(rr.rdata).strip('"')
+                    if not raw_payload.startswith("v=spf1"):
+                        if "]: " in raw_payload:
+                            sender_tag, ciphertext = raw_payload.split("]: ", 1)
+                            sender_id = sender_tag.strip('[')
+                            plaintext = decrypt_payload(ciphertext)
+                            print(f"\n[{sender_id}]: {plaintext}")
+                            print(f"[{MY_NODE_ID}]: ", end="", flush=True)
+        except Exception:
+            pass
+
+        # Jitter: Interval acak antara 3.5s hingga 8.2s
+        sleep_interval = random.uniform(3.5, 8.2)
+        time.sleep(sleep_interval)
+
+# ==============================================================================
+# NATIVE-LIKE ICMP TRANSMISSION ENGINE
+# ==============================================================================
+def send_stealth_icmp(message_text: str):
+    global icmp_seq_counter
+    
+    ciphertext = encrypt_payload(message_text)
+    core_payload = f"||STLTH||{TARGET_NODE_ID}|{MY_NODE_ID}|{ciphertext}"
+    full_payload = core_payload + "|" + STANDARD_PING_PADDING
+    
+    # Membentuk paket yang menyerupai perilaku kernel OS Linux asli:
+    # 1. hlim=64 (Default Linux Hop Limit)
+    # 2. fl=random (Flow Label acak, menghindari default 0 milik Scapy)
+    # 3. id & seq (Incremental ID & Sequence seperti perintah ping bawaan)
+    pkt = IPv6(
+        dst=VPS_IPV6_ADDRESS,
+        hlim=64,
+        fl=random.randint(1, 0xFFFFF)
+    ) / ICMPv6EchoRequest(
+        id=icmp_id_static,
+        seq=icmp_seq_counter,
+        data=full_payload.encode('utf-8')
+    )
+    
+    icmp_seq_counter += 1
+    send(pkt, verbose=False)
+
+if __name__ == "__main__":
+    print(f"=== FULLY STEALTH ENGINE LAUNCHED ({MY_NODE_ID}) ===")
+    print("[+] Native ICMPv6 Header Emulation Active (Incremental Seq & Dynamic Flow Label)")
+    print(f"[+] Wildcard Dynamic Domain Polling Active (*.{BASE_STEALTH_DOMAIN})")
+
+    t_receiver = threading.Thread(target=polling_worker, daemon=True)
+    t_receiver.start()
+
+    time.sleep(1)
+    while True:
+        try:
+            msg = input(f"[{MY_NODE_ID}]: ")
+            if msg.strip():
+                send_stealth_icmp(msg)
+        except KeyboardInterrupt:
+            sys.exit(0)
